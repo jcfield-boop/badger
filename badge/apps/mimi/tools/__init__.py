@@ -2,154 +2,112 @@
 
 import gc
 
-# ── Tool definitions (Anthropic tool_use format) ─────────────────
+# ── Tool definitions (OpenAI function-calling format for OpenRouter) ──
+
+def _fn(name, description, properties=None, required=None):
+    """Build an OpenAI-format tool schema."""
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties or {},
+                "required": required or [],
+            },
+        },
+    }
+
 
 TOOL_SCHEMAS = [
-    {
-        "name": "get_current_time",
-        "description": (
-            "Get the current date and time. Call this whenever you need to know "
-            "the current time or date. Returns a formatted string including unix epoch."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
+    _fn(
+        "get_current_time",
+        "Get the current date and time. Call this whenever you need to know "
+        "the current time or date. Returns a formatted string including unix epoch.",
+    ),
+    _fn(
+        "web_search",
+        "Search the web for current information. Use when you need up-to-date "
+        "facts, news, weather, or anything beyond your training data.",
+        {"query": {"type": "string", "description": "The search query"}},
+        ["query"],
+    ),
+    _fn(
+        "read_file",
+        "Read a file from LittleFS. Returns file contents as text.",
+        {"path": {"type": "string", "description": "Absolute path to file"}},
+        ["path"],
+    ),
+    _fn(
+        "write_file",
+        "Write or append text to a file on LittleFS.",
+        {
+            "path":    {"type": "string",  "description": "Absolute path to file"},
+            "content": {"type": "string",  "description": "Text to write"},
+            "append":  {"type": "boolean", "description": "If true, append instead of overwrite"},
         },
-    },
-    {
-        "name": "web_search",
-        "description": (
-            "Search the web for current information. Use when you need up-to-date "
-            "facts, news, weather, or anything beyond your training data."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "The search query"},
-            },
-            "required": ["query"],
+        ["path", "content"],
+    ),
+    _fn(
+        "edit_file",
+        "Replace a specific string in an existing file. "
+        "Provide old_str (exact substring to replace) and new_str.",
+        {
+            "path":    {"type": "string", "description": "Absolute path to file"},
+            "old_str": {"type": "string", "description": "Exact substring to replace"},
+            "new_str": {"type": "string", "description": "Replacement text"},
         },
-    },
-    {
-        "name": "read_file",
-        "description": "Read a file from LittleFS. Returns file contents as text.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Absolute path to file"},
-            },
-            "required": ["path"],
+        ["path", "old_str", "new_str"],
+    ),
+    _fn(
+        "list_dir",
+        "List files and directories at a path on LittleFS.",
+        {"path": {"type": "string", "description": "Directory path"}},
+        ["path"],
+    ),
+    _fn(
+        "http_request",
+        "Make an HTTPS GET or POST request to an external URL. "
+        "Returns the response body as text.",
+        {
+            "url":     {"type": "string", "description": "Full HTTPS URL"},
+            "method":  {"type": "string", "description": "HTTP method: GET or POST"},
+            "headers": {"type": "object", "description": "Optional request headers"},
+            "body":    {"type": "string", "description": "Optional request body (JSON string)"},
         },
-    },
-    {
-        "name": "write_file",
-        "description": "Write or append text to a file on LittleFS.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Absolute path to file"},
-                "content": {"type": "string", "description": "Text to write"},
-                "append": {"type": "boolean", "description": "If true, append instead of overwrite"},
-            },
-            "required": ["path", "content"],
+        ["url"],
+    ),
+    _fn(
+        "cron_add",
+        "Schedule a one-shot task. IMPORTANT: use seconds_from_now for relative "
+        "times ('in 5 minutes' = 300). Only use at_epoch if you have called "
+        "get_current_time and have the verified current unix epoch.",
+        {
+            "name":            {"type": "string",  "description": "Short label for the job"},
+            "schedule_type":   {"type": "string",  "description": "Always 'at' for one-shot"},
+            "seconds_from_now":{"type": "integer", "description": "PREFERRED: fire N seconds from now"},
+            "at_epoch":        {"type": "integer", "description": "Absolute unix timestamp (only if verified)"},
+            "message":         {"type": "string",  "description": "Prompt to run when job fires"},
+            "channel":         {"type": "string",  "description": "'telegram' for Telegram delivery"},
+            "chat_id":         {"type": "string",  "description": "Telegram chat_id (required for telegram)"},
         },
-    },
-    {
-        "name": "edit_file",
-        "description": (
-            "Replace a specific string in an existing file. "
-            "Provide old_str (exact substring to replace) and new_str."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Absolute path to file"},
-                "old_str": {"type": "string", "description": "Exact substring to replace"},
-                "new_str": {"type": "string", "description": "Replacement text"},
-            },
-            "required": ["path", "old_str", "new_str"],
-        },
-    },
-    {
-        "name": "list_dir",
-        "description": "List files and directories at a path on LittleFS.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Directory path"},
-            },
-            "required": ["path"],
-        },
-    },
-    {
-        "name": "http_request",
-        "description": (
-            "Make an HTTPS GET or POST request to an external URL. "
-            "Returns the response body as text."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "Full HTTPS URL"},
-                "method": {"type": "string", "description": "HTTP method: GET or POST"},
-                "headers": {"type": "object", "description": "Optional request headers"},
-                "body": {"type": "string", "description": "Optional request body (JSON string)"},
-            },
-            "required": ["url"],
-        },
-    },
-    {
-        "name": "cron_add",
-        "description": (
-            "Schedule a one-shot task to run at a specific unix timestamp. "
-            "The task will send a Telegram message or trigger an agent turn. "
-            "Required fields: unix_time (int), prompt (str), channel, chat_id."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "unix_time": {"type": "integer", "description": "Unix epoch when to fire"},
-                "prompt": {"type": "string", "description": "Agent prompt to run at trigger time"},
-                "channel": {"type": "string", "description": "Output channel: 'telegram'"},
-                "chat_id": {"type": "string", "description": "Telegram chat_id for delivery"},
-                "label": {"type": "string", "description": "Optional human-readable label"},
-            },
-            "required": ["unix_time", "prompt", "channel", "chat_id"],
-        },
-    },
-    {
-        "name": "cron_list",
-        "description": "List all pending scheduled tasks.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "cron_remove",
-        "description": "Remove a scheduled task by its ID.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "job_id": {"type": "integer", "description": "Job ID to remove"},
-            },
-            "required": ["job_id"],
-        },
-    },
-    {
-        "name": "system_info",
-        "description": (
-            "Get live device health: free heap, uptime seconds, WiFi RSSI, "
-            "battery level percentage."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
+        ["name", "schedule_type", "message"],
+    ),
+    _fn(
+        "cron_list",
+        "List all pending scheduled tasks.",
+    ),
+    _fn(
+        "cron_remove",
+        "Remove a scheduled task by its ID.",
+        {"job_id": {"type": "integer", "description": "Job ID to remove"}},
+        ["job_id"],
+    ),
+    _fn(
+        "system_info",
+        "Get live device health: free heap, uptime, WiFi RSSI, battery level.",
+    ),
 ]
 
 # Populated by init()
@@ -161,25 +119,22 @@ def init(cron_instance=None):
     from tools import get_time, files, web_search, http_request, system_info
 
     _registry["get_current_time"] = get_time.execute
-    _registry["web_search"] = web_search.execute
-    _registry["read_file"] = files.read_file
-    _registry["write_file"] = files.write_file
-    _registry["edit_file"] = files.edit_file
-    _registry["list_dir"] = files.list_dir
-    _registry["http_request"] = http_request.execute
-    _registry["system_info"] = system_info.execute
+    _registry["web_search"]       = web_search.execute
+    _registry["read_file"]        = files.read_file
+    _registry["write_file"]       = files.write_file
+    _registry["edit_file"]        = files.edit_file
+    _registry["list_dir"]         = files.list_dir
+    _registry["http_request"]     = http_request.execute
+    _registry["system_info"]      = system_info.execute
 
     if cron_instance is not None:
-        _registry["cron_add"] = cron_instance.add
-        _registry["cron_list"] = cron_instance.list_jobs
+        _registry["cron_add"]    = cron_instance.add
+        _registry["cron_list"]   = cron_instance.list_jobs
         _registry["cron_remove"] = cron_instance.remove
 
 
 def dispatch(name, input_dict):
-    """
-    Dispatch a tool call by name with the given input dict.
-    Returns a string result (success or error).
-    """
+    """Dispatch a tool call. Returns a string result."""
     gc.collect()
     fn = _registry.get(name)
     if fn is None:
