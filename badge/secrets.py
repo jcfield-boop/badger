@@ -27,3 +27,16 @@ GITHUB_TOKEN = ""
 #
 # Leave unset or set to None to use auto-detection (default):
 # WEATHER_LOCATION = None
+
+# ── Mimi AI assistant ─────────────────────────────────────────────
+# Telegram Bot token (from @BotFather)
+MIMI_TELEGRAM_TOKEN = ""
+
+# OpenRouter API key (https://openrouter.ai/keys)
+MIMI_OPENROUTER_KEY = ""
+
+# Model to use — "openrouter/auto" picks the best available
+MIMI_MODEL = "openrouter/auto"
+
+# Brave Search API key (https://brave.com/search/api/) — optional
+MIMI_BRAVE_KEY = ""
