@@ -8,10 +8,10 @@ from badgeware import screen, brushes, shapes, PixelFont
 # ── Layout constants ──────────────────────────────────────────────
 STATUS_BAR_H = 12       # pixels reserved at top for status bar
 MARGIN_X = 3
-LINE_H = 9              # pixels per text line (nope.ppf = 8px + 1px gap)
-SCROLL_AREA_Y = STATUS_BAR_H + 1
-SCROLL_AREA_H = 120 - SCROLL_AREA_Y - 12  # leave 12px at bottom for hint
-MAX_LINES = SCROLL_AREA_H // LINE_H        # ~9 visible lines
+LINE_H = 8              # pixels per text line (ark.ppf = 6px + 2px gap)
+SCROLL_AREA_Y = 14                         # content starts at y=14 (matches weather app)
+SCROLL_AREA_H = 108 - SCROLL_AREA_Y       # stop at y=108 where hints live
+MAX_LINES = SCROLL_AREA_H // LINE_H        # 94//8 = 11 visible lines
 
 # ── Colors ────────────────────────────────────────────────────────
 BG = brushes.color(13, 17, 23)
@@ -29,12 +29,13 @@ _thinking = False
 
 def init():
     global _font
-    _font = PixelFont.load("/system/assets/fonts/nope.ppf")
+    _font = PixelFont.load("/system/assets/fonts/ark.ppf")
 
 
 def _measure_width(text):
-    """Return pixel width of text string. measure_text returns an int in badgeware."""
-    return screen.measure_text(text)
+    """Return pixel width of text string. measure_text returns (w, h) tuple."""
+    result = screen.measure_text(text)
+    return result[0] if isinstance(result, tuple) else result
 
 
 def _word_wrap(text, max_width):

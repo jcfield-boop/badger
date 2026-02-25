@@ -42,7 +42,7 @@ def draw(wifi_connected=False, rssi=0, battery_pct=None, is_charging=False, thin
     screen.draw(shapes.line(0, BAR_H, 160, BAR_H, 1))
 
     screen.font = _font
-    y = BAR_Y + 3  # vertical center in 12px strip
+    y = BAR_Y + 2  # vertical center in 12px strip (matches weather app)
 
     # ── Left: WiFi indicator ──────────────────────────────────────
     if wifi_connected:
@@ -59,7 +59,7 @@ def draw(wifi_connected=False, rssi=0, battery_pct=None, is_charging=False, thin
         from badgeware import io
         dots = "." * ((io.ticks // 300) % 4)
         title = f"Mimi{dots}"
-    title_w = screen.measure_text(title)
+    title_w, _ = screen.measure_text(title)
     screen.brush = YELLOW if thinking else FG
     screen.text(title, (160 - title_w) // 2, y)
 
@@ -77,14 +77,16 @@ def draw(wifi_connected=False, rssi=0, battery_pct=None, is_charging=False, thin
         else:
             screen.brush = RED
             batt_str = f"{battery_pct}%!"
-        screen.text(batt_str, 158 - screen.measure_text(batt_str), y)
+        batt_w, _ = screen.measure_text(batt_str)
+        screen.text(batt_str, 158 - batt_w, y)
     else:
         try:
             import time
             uptime_s = time.ticks_ms() // 1000
             up_str = f"{uptime_s}s"
             screen.brush = GRAY
-            screen.text(up_str, 158 - screen.measure_text(up_str), y)
+            up_w, _ = screen.measure_text(up_str)
+            screen.text(up_str, 158 - up_w, y)
         except Exception:
             pass
 

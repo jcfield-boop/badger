@@ -9,7 +9,7 @@ import time
 import memory as mem_module
 
 TG_BASE = "https://api.telegram.org/bot"
-POLL_TIMEOUT = 30   # seconds for long-poll
+POLL_TIMEOUT = 30   # seconds for long-poll (use 0 for non-blocking check)
 DEDUP_SIZE = 64     # ring buffer for seen message IDs
 
 _token = None
@@ -110,14 +110,15 @@ def send_message(chat_id, text):
     return True
 
 
-def poll_once(message_queue):
+def poll_once(message_queue, timeout=POLL_TIMEOUT):
     """
-    Poll for new updates. Appends (chat_id, text) tuples to message_queue.
+    Poll for new updates. Appends (chat_id, text, channel) tuples to message_queue.
+    Use timeout=0 for a non-blocking check (returns immediately).
     Returns number of new messages found.
     """
     global _update_offset
 
-    params = {"timeout": POLL_TIMEOUT, "allowed_updates": "message"}
+    params = {"timeout": timeout, "allowed_updates": "message"}
     if _update_offset > 0:
         params["offset"] = _update_offset
 
@@ -150,7 +151,7 @@ def poll_once(message_queue):
         _seen_add(key)
 
         print(f"[telegram] [{chat_id}] {text[:80]}")
-        message_queue.append((chat_id, text))
+        message_queue.append((chat_id, text, "telegram"))
         count += 1
 
     return count

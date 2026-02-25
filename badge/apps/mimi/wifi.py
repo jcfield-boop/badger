@@ -26,6 +26,20 @@ def load_credentials():
     return _ssid is not None
 
 
+def start_connect():
+    """Start WiFi connection without blocking. Call once, then poll is_connected()."""
+    global wlan
+    if not load_credentials():
+        return False
+    if wlan is None:
+        wlan = network.WLAN(network.STA_IF)
+        wlan.active(True)
+    if not wlan.isconnected():
+        print(f"[wifi] Connecting to {_ssid}...")
+        wlan.connect(_ssid, _password)
+    return True
+
+
 def connect(timeout=30):
     """Connect to WiFi. Returns True if connected."""
     global wlan, _connected
