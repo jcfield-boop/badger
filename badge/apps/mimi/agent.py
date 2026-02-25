@@ -56,12 +56,14 @@ def _get_model():
 
 def _call_llm(messages, system_prompt, api_key, model):
     """POST to OpenRouter, return parsed response dict or raise."""
+    # OpenAI/OpenRouter format: system prompt is the first message
+    full_messages = [{"role": "system", "content": system_prompt}] + messages
     payload = {
         "model": model,
         "max_tokens": MAX_TOKENS,
-        "system": system_prompt,
-        "messages": messages,
+        "messages": full_messages,
         "tools": tool_registry.TOOL_SCHEMAS,
+        "tool_choice": "auto",
     }
 
     gc.collect()
@@ -184,40 +186,40 @@ def run(user_message, chat_id="default", channel="telegram", status_cb=None):
         if text:
             final_text = text
 
-        # Build assistant message for history
-        assistant_content = []
-        if text:
-            assistant_content.append({"type": "text", "text": text})
-        for tc in tool_calls:
-            assistant_content.append({
-                "type": "tool_use",
-                "id": tc["id"],
-                "name": tc["name"],
-                "input": tc["input"],
-            })
-
-        if assistant_content:
-            messages.append({"role": "assistant", "content": assistant_content})
+        # Build assistant message (OpenAI format)
+        asst_msg = {"role": "assistant", "content": text or ""}
+        if tool_calls:
+            asst_msg["tool_calls"] = [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc["input"]),
+                    },
+                }
+                for tc in tool_calls
+            ]
+        messages.append(asst_msg)
 
         # If no tool calls, we're done
         if not tool_calls:
             break
 
-        # Execute tools, collect results
-        tool_results = []
+        # Execute tools, append results (OpenAI tool message format)
         for tc in tool_calls:
             if status_cb:
                 status_cb(f"Tool: {tc['name']}…")
             print(f"[agent] Tool: {tc['name']} input={tc['input']}")
             result = tool_registry.dispatch(tc["name"], tc["input"])
             print(f"[agent] Tool result: {str(result)[:80]}")
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tc["id"],
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
                 "content": str(result),
             })
 
-        messages.append({"role": "user", "content": tool_results})
+        gc.collect()
         gc.collect()
 
     # Persist session
