@@ -304,4 +304,5 @@ _MENU = [
 ]
 
 
-run(update)
+if __name__ == "__main__":
+    run(update)
