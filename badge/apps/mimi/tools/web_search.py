@@ -1,74 +1,76 @@
-"""Brave Search API tool for Mimi."""
+"""Tavily Search API tool for Mimi."""
 
 import urequests
 import json
 import memory as mem_module
 
-BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
+TAVILY_URL = "https://api.tavily.com/search"
 MAX_RESULTS = 5
 
 
 def _get_api_key():
-    """Read Brave API key from SERVICES.md."""
-    services = mem_module.read_services()
-    for line in services.splitlines():
-        line = line.strip()
-        if line.startswith("BRAVE_KEY=") or line.startswith("BRAVE_API_KEY="):
-            return line.split("=", 1)[1].strip()
-    # Also check secrets.py
+    """Read Tavily API key from secrets.py or SERVICES.md."""
     try:
         import sys
         sys.path.insert(0, "/")
-        from secrets import MIMI_BRAVE_KEY
+        from secrets import MIMI_BRAVE_KEY  # kept the name from secrets.py
         sys.path.pop(0)
-        return MIMI_BRAVE_KEY
+        if MIMI_BRAVE_KEY:
+            return MIMI_BRAVE_KEY
     except (ImportError, AttributeError):
         pass
+    # Also check SERVICES.md
+    services = mem_module.read_services()
+    for line in services.splitlines():
+        line = line.strip()
+        for prefix in ("TAVILY_KEY=", "BRAVE_KEY=", "BRAVE_API_KEY=", "SEARCH_KEY="):
+            if line.startswith(prefix):
+                return line.split("=", 1)[1].strip()
     return None
 
 
 def execute(query):
-    """Search the web using Brave Search. Returns formatted results."""
+    """Search the web using Tavily. Returns formatted results."""
     api_key = _get_api_key()
     if not api_key:
-        return "Error: no Brave Search API key found (set MIMI_BRAVE_KEY in secrets.py)"
+        return "Error: no search API key found (set MIMI_BRAVE_KEY in secrets.py)"
+
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "search_depth": "basic",
+        "max_results": MAX_RESULTS,
+        "include_answer": True,
+    }
 
     try:
-        headers = {
-            "Accept": "application/json",
-            "Accept-Encoding": "gzip",
-            "X-Subscription-Token": api_key,
-        }
-        url = f"{BRAVE_API_URL}?q={_urlencode(query)}&count={MAX_RESULTS}&text_decorations=false"
-        resp = urequests.get(url, headers=headers, timeout=15)
+        headers = {"Content-Type": "application/json"}
+        resp = urequests.post(
+            TAVILY_URL,
+            headers=headers,
+            data=json.dumps(payload),
+            timeout=20,
+        )
         data = resp.json()
         resp.close()
     except Exception as e:
         return f"Error: search request failed: {e}"
 
-    results = data.get("web", {}).get("results", [])
-    if not results:
-        return "No results found."
-
     lines = [f"Search results for: {query}\n"]
+
+    # Tavily sometimes returns a direct answer
+    answer = data.get("answer")
+    if answer:
+        lines.append(f"Answer: {answer}\n")
+
+    results = data.get("results", [])
+    if not results:
+        return "\n".join(lines) if len(lines) > 1 else "No results found."
+
     for i, r in enumerate(results[:MAX_RESULTS], 1):
-        title = r.get("title", "")
+        title   = r.get("title", "")
         url_str = r.get("url", "")
-        desc = r.get("description", "")
-        lines.append(f"{i}. {title}\n   {url_str}\n   {desc}\n")
+        content = r.get("content", "")[:200]  # trim long snippets
+        lines.append(f"{i}. {title}\n   {url_str}\n   {content}\n")
 
     return "\n".join(lines)
-
-
-def _urlencode(s):
-    """Minimal URL encoding for query strings."""
-    safe = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-    result = []
-    for c in s:
-        if c in safe:
-            result.append(c)
-        elif c == " ":
-            result.append("+")
-        else:
-            result.append(f"%{ord(c):02X}")
-    return "".join(result)
