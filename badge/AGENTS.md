@@ -583,6 +583,21 @@ def update():
 6. **Not Handling Errors** - Wrap file operations in try/except
 7. **Memory Leaks** - Don't create new objects in tight loops
 8. **Coordinate System** - Remember screen is 160x120 logical pixels, not 320x240
+9. **`screen.measure_text()` returns a tuple `(width, height)`** — always unpack: `w, _ = screen.measure_text(text)`. Comparing the tuple to an int will crash.
+10. **Blocking calls in `init()` freeze the app** — `init()` runs after the HOME button interrupt is armed, so any long block (e.g. `wifi.connect(timeout=30)`) appears frozen and the user presses HOME. Start async/polled work in `init()` and drive it from `update()` instead.
+11. **`_thread` is not available** — the Pimoroni RP2350 MicroPython build does not expose `_thread`. Use timed polling from `update()` for background work (Telegram polling, cron, WiFi refresh).
+
+## Layout Reference (160×120)
+
+Proven y-coordinates from the weather app (use these as anchors):
+
+```
+y=0-11   Status/header bar (12 px tall)
+y=2      Header text baseline (ark.ppf, 6 px)
+y=13     Separator line
+y=14     First content line
+y=108    Bottom hint/button-label text baseline (ark.ppf, 6 px, ends at y=114)
+```
 
 ## Reference Apps in This Project
 
@@ -595,6 +610,7 @@ Study these apps for working examples:
 - **`/badge/apps/sketch/`** - Drawing app with button controls
 - **`/badge/apps/quest/`** - IR beacon hunting game
 - **`/badge/apps/menu/`** - Launcher menu with icon grid
+- **`/badge/apps/mimi/`** - AI assistant with Telegram, LLM, and tool use (WiFi-dependent app pattern)
 
 ## Additional Resources
 

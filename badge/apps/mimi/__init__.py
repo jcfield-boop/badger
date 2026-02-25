@@ -1,5 +1,9 @@
 """
 Mimi — AI assistant badge app for GitHub Universe 2025 / Pimoroni Tufty RP2350.
+
+Non-blocking init: WiFi connection happens inside update() so the frame loop
+stays alive and shows a "Connecting..." screen (same pattern as weather app).
+No threading — Telegram polling and cron run synchronously from update().
 """
 
 import sys
@@ -42,15 +46,21 @@ def _crash(e):
             lines.append(raw)
 
     def _err_update():
-        screen.brush = RED
-        screen.clear()
-        screen.brush = WHITE
-        screen.text("MIMI CRASH", 2, 2)
-        screen.brush = GRAY
-        for i, ln in enumerate(lines[:10]):
-            screen.text(ln, 2, 13 + i * 10)
+        try:
+            screen.brush = RED
+            screen.clear()
+            screen.brush = WHITE
+            screen.text("MIMI CRASH", 2, 2)
+            screen.brush = GRAY
+            for i, ln in enumerate(lines[:10]):
+                screen.text(ln, 2, 13 + i * 10)
+        except Exception:
+            pass
 
-    run(_err_update)
+    try:
+        run(_err_update)
+    except Exception as re:
+        print("[mimi] crash display failed:", re)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -58,8 +68,6 @@ def _crash(e):
 # ─────────────────────────────────────────────────────────────────
 try:
     import gc
-    import time
-    import _thread
 
     try:
         from badgeware import get_battery_level as _get_battery_level
@@ -83,88 +91,174 @@ except Exception as _e:
 
 
 # ── Shared state ──────────────────────────────────────────────────
-_wifi_connected = False
-_rssi           = 0
-_battery_pct    = None
-_is_charging    = False
-_thinking       = False
-_view           = "chat"
-_menu_sel       = 0
-_stop_flag      = [False]
-_msg_queue      = []
-_font           = None
+_wifi_connected   = False
+_rssi             = 0
+_battery_pct      = None
+_is_charging      = False
+_thinking         = False
+_view             = "chat"
+_menu_sel         = 0
+_msg_queue        = []
+_font             = None
+
+# Startup state machine
+_ready            = False   # True after WiFi connected + time sync done
+_wifi_creds_found = True    # False if no WiFi credentials in secrets.py
+
+# Timing for periodic background work (io.ticks is ms)
+_POLL_INTERVAL_MS = 5000    # Telegram poll every 5 s (timeout=0 = instant)
+_CRON_INTERVAL_MS = 1000    # Cron check every 1 s
+_WIFI_INTERVAL_MS = 15000   # WiFi status refresh every 15 s
+
+_last_poll_ticks = None
+_last_cron_ticks = None
+_last_wifi_ticks = None
 
 
-# ── Init ──────────────────────────────────────────────────────────
+# ── Init (fast — no blocking calls) ───────────────────────────────
 
 def init():
-    global _font, _wifi_connected, _rssi
+    global _font, _wifi_creds_found
+    global _last_poll_ticks, _last_cron_ticks, _last_wifi_ticks
 
     gc.collect()
     mem.init()
     sbar.init()
     conv.init()
 
-    _font = PixelFont.load("/system/assets/fonts/nope.ppf")
+    _font = PixelFont.load("/system/assets/fonts/ark.ppf")
     screen.font = _font
 
     cron_module.init()
     tool_registry.init(cron_instance=cron_module)
 
-    conv.add_message("system", "Connecting to WiFi\u2026")
-    _wifi_connected = wifi.connect(timeout=30)
-    _rssi = wifi.get_rssi()
+    # Start WiFi without blocking — update() will poll for connection
+    _wifi_creds_found = wifi.start_connect()
 
-    if _wifi_connected:
-        conv.add_message("system", "WiFi connected.")
+    now = io.ticks
+    _last_poll_ticks = now - _POLL_INTERVAL_MS
+    _last_cron_ticks = now
+    _last_wifi_ticks = now
+
+
+def on_exit():
+    pass
+
+
+# ── Frame update ─────────────────────────────────────────────────
+
+def update():
+    global _battery_pct, _is_charging, _view, _menu_sel
+    global _wifi_connected, _rssi, _thinking, _ready
+    global _last_poll_ticks, _last_cron_ticks, _last_wifi_ticks
+
+    if _last_poll_ticks is None:
+        now = io.ticks
+        _last_poll_ticks = now - _POLL_INTERVAL_MS
+        _last_cron_ticks = now
+        _last_wifi_ticks = now
+
+    now = io.ticks
+
+    # Battery (fast, always)
+    if _HAS_BATTERY:
+        try:
+            _battery_pct = _get_battery_level()
+            _is_charging = _badge_is_charging()
+        except Exception:
+            pass
+
+    # ── Startup: show connecting screen until WiFi is ready ───────
+    if not _ready:
+        if not _wifi_creds_found:
+            _draw_no_wifi()
+            return
+        _wifi_connected = wifi.is_connected()
+        if not _wifi_connected:
+            _draw_connecting()
+            return
+        # Connected — do one-time post-connect setup (brief blocking calls OK)
+        _rssi = wifi.get_rssi()
         try:
             import tools.get_time as gt
             t = gt.execute()
             conv.add_message("system", f"Clock: {t}")
         except Exception as e:
             conv.add_message("system", f"Time sync: {e}")
-    else:
-        conv.add_message("system", "No WiFi.")
+        conv.add_message("system", "Ready.")
+        _ready = True
+        _last_poll_ticks = now - _POLL_INTERVAL_MS  # poll right away
 
-    _stop_flag[0] = False
-    _thread.start_new_thread(_background_thread, ())
-    conv.add_message("system", "Ready.")
+    # ── Normal operation ──────────────────────────────────────────
 
-
-def on_exit():
-    _stop_flag[0] = True
-    time.sleep(0.3)
-
-
-# ── Background thread (core 1) ────────────────────────────────────
-
-def _background_thread():
-    global _wifi_connected, _rssi, _thinking
-
-    while not _stop_flag[0]:
-        _wifi_connected = wifi.ensure_connected(20)
+    # WiFi status refresh (non-blocking)
+    if now - _last_wifi_ticks >= _WIFI_INTERVAL_MS:
+        _last_wifi_ticks = now
+        _wifi_connected = wifi.is_connected()
         _rssi = wifi.get_rssi()
 
-        if not _wifi_connected:
-            time.sleep(5)
-            continue
-
+    # Telegram poll (non-blocking, timeout=0)
+    if _wifi_connected and not _thinking and (now - _last_poll_ticks) >= _POLL_INTERVAL_MS:
+        _last_poll_ticks = now
         try:
-            telegram.poll_once(_msg_queue)
+            telegram.poll_once(_msg_queue, timeout=0)
         except Exception as e:
-            print(f"[bg] poll: {e}")
+            print(f"[poll] {e}")
 
-        while _msg_queue and not _stop_flag[0]:
-            chat_id, text, channel = _msg_queue.pop(0)
-            _run_agent(chat_id, text, channel)
+    # Process one pending message (agent call blocks ~30-60s)
+    if _msg_queue and not _thinking:
+        chat_id, text, channel = _msg_queue.pop(0)
+        _run_agent(chat_id, text, channel)
 
+    # Cron tick (fast, every 1 s)
+    if now - _last_cron_ticks >= _CRON_INTERVAL_MS:
+        _last_cron_ticks = now
         try:
             cron_module.tick(lambda p, ch, cid: _msg_queue.append((cid, p, ch)))
         except Exception as e:
-            print(f"[bg] cron: {e}")
+            print(f"[cron] {e}")
 
-        gc.collect()
-        time.sleep(1)
+    _handle_buttons()
+
+    screen.brush = BG
+    screen.clear()
+
+    if _view == "menu":
+        _draw_menu()
+    else:
+        conv.draw()
+        _draw_hints()
+
+    sbar.draw(
+        wifi_connected=_wifi_connected,
+        rssi=_rssi,
+        battery_pct=_battery_pct,
+        is_charging=_is_charging,
+        thinking=_thinking,
+    )
+
+
+def _draw_connecting():
+    dots = "." * ((io.ticks // 400) % 4)
+    screen.brush = BG
+    screen.clear()
+    if _font:
+        screen.font = _font
+        screen.brush = WHITE
+        screen.text(f"Connecting{dots}", 2, 55)
+        screen.brush = GRAY
+        screen.text("WiFi...", 2, 64)
+
+
+def _draw_no_wifi():
+    screen.brush = BG
+    screen.clear()
+    if _font:
+        screen.font = _font
+        screen.brush = RED
+        screen.text("No WiFi config", 2, 55)
+        screen.brush = GRAY
+        screen.text("Add to secrets.py", 2, 64)
 
 
 def _run_agent(chat_id, text, channel="telegram"):
@@ -189,38 +283,10 @@ def _run_agent(chat_id, text, channel="telegram"):
         except Exception as e:
             print(f"[app] send: {e}")
 
+    gc.collect()
 
-# ── Frame update (core 0) ─────────────────────────────────────────
 
-def update():
-    global _battery_pct, _is_charging, _view, _menu_sel
-
-    if _HAS_BATTERY:
-        try:
-            _battery_pct = _get_battery_level()
-            _is_charging = _badge_is_charging()
-        except Exception:
-            pass
-
-    _handle_buttons()
-
-    screen.brush = BG
-    screen.clear()
-
-    if _view == "menu":
-        _draw_menu()
-    else:
-        conv.draw()
-        _draw_hints()
-
-    sbar.draw(
-        wifi_connected=_wifi_connected,
-        rssi=_rssi,
-        battery_pct=_battery_pct,
-        is_charging=_is_charging,
-        thinking=_thinking,
-    )
-
+# ── Button handling ───────────────────────────────────────────────
 
 def _handle_buttons():
     global _view, _menu_sel
@@ -249,7 +315,7 @@ def _draw_hints():
     if _font:
         screen.font = _font
         screen.brush = GRAY
-        screen.text("[A]Ping [B]Clear [C]Menu", 2, 113)
+        screen.text("[A]Ping [B]Clear [C]Menu", 2, 108)
 
 
 def _draw_menu():
