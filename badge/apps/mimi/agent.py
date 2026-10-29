@@ -71,6 +71,35 @@ def _get_model():
 # actual LLM eval harness, not guesswork. Using this known-working flattened
 # prompt until that's done; it loses the File Paths/Credentials/Memory
 # sections from context.py, so file/memory-writing tool use is unverified.
+def _flatten(text, limit=1500):
+    """Defensive generic flattener for any message content sent to the LLM.
+
+    Collapses numbered/bulleted lines and multi-line structure to a single
+    plain-prose line, and caps length. This is a broad, unproven-per-case
+    precaution (see the FIXME above) applied to every tool result / user /
+    assistant message, not just the system prompt — the exact trigger for
+    the request corruption is still unidentified, so this reduces surface
+    area rather than guaranteeing a fix. Test after changing.
+    """
+    text = str(text)[:limit]
+    parts = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        line = line.lstrip("#").strip()
+        # strip "1. ", "2. ", "- ", "* " leading markers
+        i = 0
+        while i < len(line) and line[i].isdigit():
+            i += 1
+        if i > 0 and line[i:i + 2] == ". ":
+            line = line[i + 2:]
+        elif line[:2] in ("- ", "* "):
+            line = line[2:]
+        parts.append(line)
+    return " ".join(parts)
+
+
 _FALLBACK_SYSTEM_PROMPT = (
     "You are Mimi, a personal AI assistant running on a GitHub Universe badge. "
     "You interact via Telegram and a small display. Keep responses under 800 words, "
@@ -211,7 +240,7 @@ def run(user_message, chat_id="default", channel="telegram", status_cb=None):
     messages = mem_module.load_session(chat_id)
 
     # Append user message
-    messages.append({"role": "user", "content": user_message})
+    messages.append({"role": "user", "content": _flatten(user_message)})
 
     # Build system prompt (includes memory)
     system_prompt = ctx_module.build_system_prompt()
@@ -242,8 +271,10 @@ def run(user_message, chat_id="default", channel="telegram", status_cb=None):
         if text:
             final_text = text
 
-        # Build assistant message (OpenAI format)
-        asst_msg = {"role": "assistant", "content": text or ""}
+        # Build assistant message (OpenAI format). final_text (returned to
+        # the user/display) keeps the original formatting; only the copy
+        # stored in history for future requests gets flattened.
+        asst_msg = {"role": "assistant", "content": _flatten(text) if text else ""}
         if tool_calls:
             asst_msg["tool_calls"] = [
                 {
@@ -272,7 +303,7 @@ def run(user_message, chat_id="default", channel="telegram", status_cb=None):
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
-                "content": str(result),
+                "content": _flatten(result),
             })
 
         gc.collect()
