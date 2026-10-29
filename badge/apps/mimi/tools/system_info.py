@@ -40,9 +40,8 @@ def execute():
     # Battery level
     battery_str = "N/A"
     try:
-        from badgeware import get_battery_level, is_charging
-        level = get_battery_level()
-        charging = is_charging()
+        level = badge.battery_level()
+        charging = badge.is_charging()
         battery_str = f"{level}%{' (charging)' if charging else ''}"
     except Exception:
         pass
