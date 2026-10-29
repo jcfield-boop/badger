@@ -102,6 +102,7 @@ _wifi_creds_found = True    # False if no WiFi credentials in secrets.py
 _POLL_INTERVAL_MS = 5000    # Telegram poll every 5 s (timeout=0 = instant)
 _CRON_INTERVAL_MS = 1000    # Cron check every 1 s
 _WIFI_INTERVAL_MS = 15000   # WiFi status refresh every 15 s
+_WIFI_CONNECT_TIMEOUT_MS = 15000  # show the offline-skip prompt after 15 s
 
 # ── Startup (fast — no blocking calls) ─────────────────────────────
 # Runs once at module load, replacing the 2025 init() hook (the 2026
@@ -120,6 +121,7 @@ tool_registry.init(cron_instance=cron_module)
 
 # Start WiFi without blocking — update() will poll for connection
 _wifi_creds_found = wifi.start_connect()
+_connect_started_ticks = badge.ticks
 
 _last_poll_ticks = badge.ticks - _POLL_INTERVAL_MS
 _last_cron_ticks = badge.ticks
@@ -149,19 +151,29 @@ def update():
             return
         _wifi_connected = wifi.is_connected()
         if not _wifi_connected:
-            _draw_connecting()
-            return
-        # Connected — do one-time post-connect setup (brief blocking calls OK)
-        _rssi = wifi.get_rssi()
-        try:
-            import tools.get_time as gt
-            t = gt.execute()
-            conv.add_message("system", f"Clock: {t}")
-        except Exception as e:
-            conv.add_message("system", f"Time sync: {e}")
-        conv.add_message("system", "Ready.")
-        _ready = True
-        _last_poll_ticks = now - _POLL_INTERVAL_MS  # poll right away
+            elapsed = now - _connect_started_ticks
+            if elapsed < _WIFI_CONNECT_TIMEOUT_MS:
+                _draw_connecting()
+                return
+            if not badge.pressed(BUTTON_MENU):
+                _draw_wifi_timeout()
+                return
+            # User skipped — continue without WiFi (degraded: no Telegram/LLM)
+            conv.add_message("system", "No WiFi — continuing offline.")
+            _ready = True
+            _last_poll_ticks = now - _POLL_INTERVAL_MS
+        else:
+            # Connected — do one-time post-connect setup (brief blocking calls OK)
+            _rssi = wifi.get_rssi()
+            try:
+                import tools.get_time as gt
+                t = gt.execute()
+                conv.add_message("system", f"Clock: {t}")
+            except Exception as e:
+                conv.add_message("system", f"Time sync: {e}")
+            conv.add_message("system", "Ready.")
+            _ready = True
+            _last_poll_ticks = now - _POLL_INTERVAL_MS  # poll right away
 
     # ── Normal operation ──────────────────────────────────────────
 
@@ -233,6 +245,19 @@ def _draw_no_wifi():
         screen.text("No WiFi config", 2, 55)
         screen.pen = GRAY
         screen.text("Add to secrets.py", 2, 64)
+
+
+def _draw_wifi_timeout():
+    screen.pen = BG
+    screen.clear()
+    if _font:
+        screen.font = _font
+        screen.pen = RED
+        screen.text("No WiFi yet", 2, 46)
+        screen.pen = GRAY
+        screen.text("Still trying...", 2, 55)
+        screen.pen = WHITE
+        screen.text("[Menu] Go offline", 2, 66)
 
 
 def _run_agent(chat_id, text, channel="telegram"):
