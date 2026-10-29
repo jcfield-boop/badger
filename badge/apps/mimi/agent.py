@@ -6,6 +6,7 @@ Ported from agent_loop.c + llm_proxy.c.
 
 import gc
 import json
+import time
 import urequests
 import memory as mem_module
 import context as ctx_module
@@ -18,6 +19,9 @@ DEFAULT_MODEL = "openrouter/auto"
 MAX_TOOL_ITERATIONS = 10
 MAX_TOKENS = 1000
 CHUNK_SIZE = 512  # bytes for reading response
+REQUEST_TIMEOUT_S = 60
+MAX_RETRIES = 1     # one retry on a transient network error (not on a slow-but-live response)
+RETRY_DELAY_S = 1
 
 
 def _get_api_key():
@@ -54,10 +58,32 @@ def _get_model():
 
 # ── LLM call ─────────────────────────────────────────────────────
 
+# FIXME: Mimi's full markdown system prompt (context.build_system_prompt(),
+# headers/bullets/sections) reliably breaks this request on OpenRouter: the
+# API reports a bogus "messages[1].role missing" error that isn't present in
+# the JSON we actually send (confirmed via local round-trip and byte-level
+# inspection — no quotes/backslashes/control chars, correctly escaped).
+# Verified live and repeatedly: pure filler text of identical length and a
+# fully rewritten plain-prose paragraph both succeed; the real markdown
+# content fails even split in half, even with newlines collapsed to a single
+# line, even with the "## Credentials" section removed. The exact trigger
+# inside the wording is still unidentified — root-causing further needs the
+# actual LLM eval harness, not guesswork. Using this known-working flattened
+# prompt until that's done; it loses the File Paths/Credentials/Memory
+# sections from context.py, so file/memory-writing tool use is unverified.
+_FALLBACK_SYSTEM_PROMPT = (
+    "You are Mimi, a personal AI assistant running on a GitHub Universe badge. "
+    "You interact via Telegram and a small display. Keep responses under 800 words, "
+    "prefer bullet points, be concise. Use the web_search tool for current facts, news, "
+    "or weather. Use get_current_time for the date or time. Use tools when needed instead "
+    "of guessing."
+)
+
+
 def _call_llm(messages, system_prompt, api_key, model):
     """POST to OpenRouter, return parsed response dict or raise."""
     # OpenAI/OpenRouter format: system prompt is the first message
-    full_messages = [{"role": "system", "content": system_prompt}] + messages
+    full_messages = [{"role": "system", "content": _FALLBACK_SYSTEM_PROMPT}] + messages
     payload = {
         "model": model,
         "max_tokens": MAX_TOKENS,
@@ -80,16 +106,42 @@ def _call_llm(messages, system_prompt, api_key, model):
     body = json.dumps(payload)
     print(f"[agent] Request: {len(body)} bytes")
 
-    resp = urequests.post(OPENROUTER_URL, headers=headers, data=body, timeout=60)
+    status = None
+    raw = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            resp = urequests.post(OPENROUTER_URL, headers=headers, data=body, timeout=REQUEST_TIMEOUT_S)
+            try:
+                status = resp.status_code
+                # Read response body — urequests buffers the whole response in PSRAM
+                raw = resp.content
+            finally:
+                resp.close()  # always release the socket, even if .content raised
+            break
+        except Exception as e:
+            if attempt < MAX_RETRIES:
+                print(f"[agent] LLM request failed ({type(e).__name__}: {e}), retrying...")
+                time.sleep(RETRY_DELAY_S)
+                continue
+            raise RuntimeError(f"request failed ({type(e).__name__}: {e})")
 
-    # Read response body — urequests buffers the whole response in PSRAM
-    raw = resp.content
-    resp.close()
-    print(f"[agent] Response: {len(raw)} bytes")
+    print(f"[agent] Response: HTTP {status}, {len(raw)} bytes")
 
-    data = json.loads(raw.decode("utf-8"))
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        snippet = raw.decode("utf-8", "ignore")[:200]
+        raise RuntimeError(f"HTTP {status}, non-JSON response: {snippet}")
+
     del raw
     gc.collect()
+
+    # Normally the body carries {"error": {...}} on failure, which
+    # _extract_response already surfaces. This is just a safety net for
+    # the unexpected case of a bad status with no error payload at all.
+    if status != 200 and "error" not in data:
+        raise RuntimeError(f"HTTP {status}: {data}")
+
     return data
 
 
@@ -101,7 +153,11 @@ def _extract_response(data):
     choices = data.get("choices", [])
     if not choices:
         error = data.get("error", {})
-        raise RuntimeError(f"LLM error: {error.get('message', 'no choices')}")
+        if isinstance(error, dict):
+            msg = error.get("message", "no choices")
+        else:
+            msg = str(error) if error else "no choices"
+        raise RuntimeError(f"LLM error: {msg}")
 
     msg = choices[0].get("message", {})
     text = msg.get("content") or ""
