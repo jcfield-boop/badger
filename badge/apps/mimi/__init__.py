@@ -1,25 +1,26 @@
 """
-Mimi — AI assistant badge app for GitHub Universe 2025 / Pimoroni Tufty RP2350.
+Mimi — AI assistant badge app for GitHub Universe 2026.
 
-Non-blocking init: WiFi connection happens inside update() so the frame loop
-stays alive and shows a "Connecting..." screen (same pattern as weather app).
-No threading — Telegram polling and cron run synchronously from update().
+Non-blocking startup: WiFi connection happens inside update() so the frame
+loop stays alive and shows a "Connecting..." screen (same pattern as the
+weather app). No threading — Telegram polling and cron run synchronously
+from update().
 """
 
 import sys
 import os
 
-sys.path.insert(0, "/system/apps/mimi")
-os.chdir("/system/apps/mimi")
+APP_DIR = "/system/apps/mimi"
+sys.path.insert(0, APP_DIR)
+os.chdir(APP_DIR)
 
-# Badgeware always loads first — needed even for error display
-from badgeware import screen, brushes, shapes, PixelFont, io, run
+# screen, color, font, badge, and run are runtime-provided globals (2026 API).
 
-BG    = brushes.color(13, 17, 23)
-RED   = brushes.color(200, 50, 50)
-WHITE = brushes.color(235, 245, 255)
-GRAY  = brushes.color(100, 110, 120)
-YELLOW = brushes.color(211, 250, 55)
+BG    = color.rgb(13, 17, 23)
+RED   = color.rgb(200, 50, 50)
+WHITE = color.rgb(235, 245, 255)
+GRAY  = color.rgb(100, 110, 120)
+YELLOW = color.rgb(211, 250, 55)
 
 
 def _crash(e):
@@ -31,8 +32,7 @@ def _crash(e):
     print("[mimi] CRASH:", tb)
 
     try:
-        font = PixelFont.load("/system/assets/fonts/ark.ppf")
-        screen.font = font
+        screen.font = font.ark
     except Exception:
         pass
 
@@ -47,11 +47,11 @@ def _crash(e):
 
     def _err_update():
         try:
-            screen.brush = RED
+            screen.pen = RED
             screen.clear()
-            screen.brush = WHITE
+            screen.pen = WHITE
             screen.text("MIMI CRASH", 2, 2)
-            screen.brush = GRAY
+            screen.pen = GRAY
             for i, ln in enumerate(lines[:10]):
                 screen.text(ln, 2, 13 + i * 10)
         except Exception:
@@ -68,13 +68,6 @@ def _crash(e):
 # ─────────────────────────────────────────────────────────────────
 try:
     import gc
-
-    try:
-        from badgeware import get_battery_level as _get_battery_level
-        from badgeware import is_charging as _badge_is_charging
-        _HAS_BATTERY = True
-    except ImportError:
-        _HAS_BATTERY = False
 
     import wifi
     import memory as mem
@@ -105,44 +98,32 @@ _font             = None
 _ready            = False   # True after WiFi connected + time sync done
 _wifi_creds_found = True    # False if no WiFi credentials in secrets.py
 
-# Timing for periodic background work (io.ticks is ms)
+# Timing for periodic background work (badge.ticks is ms)
 _POLL_INTERVAL_MS = 5000    # Telegram poll every 5 s (timeout=0 = instant)
 _CRON_INTERVAL_MS = 1000    # Cron check every 1 s
 _WIFI_INTERVAL_MS = 15000   # WiFi status refresh every 15 s
 
-_last_poll_ticks = None
-_last_cron_ticks = None
-_last_wifi_ticks = None
+# ── Startup (fast — no blocking calls) ─────────────────────────────
+# Runs once at module load, replacing the 2025 init() hook (the 2026
+# runtime only calls run(update) — there is no separate init()/on_exit()).
 
+gc.collect()
+mem.init()
+sbar.init()
+conv.init()
 
-# ── Init (fast — no blocking calls) ───────────────────────────────
+_font = font.ark
+screen.font = _font
 
-def init():
-    global _font, _wifi_creds_found
-    global _last_poll_ticks, _last_cron_ticks, _last_wifi_ticks
+cron_module.init()
+tool_registry.init(cron_instance=cron_module)
 
-    gc.collect()
-    mem.init()
-    sbar.init()
-    conv.init()
+# Start WiFi without blocking — update() will poll for connection
+_wifi_creds_found = wifi.start_connect()
 
-    _font = PixelFont.load("/system/assets/fonts/ark.ppf")
-    screen.font = _font
-
-    cron_module.init()
-    tool_registry.init(cron_instance=cron_module)
-
-    # Start WiFi without blocking — update() will poll for connection
-    _wifi_creds_found = wifi.start_connect()
-
-    now = io.ticks
-    _last_poll_ticks = now - _POLL_INTERVAL_MS
-    _last_cron_ticks = now
-    _last_wifi_ticks = now
-
-
-def on_exit():
-    pass
+_last_poll_ticks = badge.ticks - _POLL_INTERVAL_MS
+_last_cron_ticks = badge.ticks
+_last_wifi_ticks = badge.ticks
 
 
 # ── Frame update ─────────────────────────────────────────────────
@@ -152,21 +133,14 @@ def update():
     global _wifi_connected, _rssi, _thinking, _ready
     global _last_poll_ticks, _last_cron_ticks, _last_wifi_ticks
 
-    if _last_poll_ticks is None:
-        now = io.ticks
-        _last_poll_ticks = now - _POLL_INTERVAL_MS
-        _last_cron_ticks = now
-        _last_wifi_ticks = now
-
-    now = io.ticks
+    now = badge.ticks
 
     # Battery (fast, always)
-    if _HAS_BATTERY:
-        try:
-            _battery_pct = _get_battery_level()
-            _is_charging = _badge_is_charging()
-        except Exception:
-            pass
+    try:
+        _battery_pct = badge.battery_level()
+        _is_charging = badge.is_charging()
+    except Exception:
+        pass
 
     # ── Startup: show connecting screen until WiFi is ready ───────
     if not _ready:
@@ -220,7 +194,7 @@ def update():
 
     _handle_buttons()
 
-    screen.brush = BG
+    screen.pen = BG
     screen.clear()
 
     if _view == "menu":
@@ -239,25 +213,25 @@ def update():
 
 
 def _draw_connecting():
-    dots = "." * ((io.ticks // 400) % 4)
-    screen.brush = BG
+    dots = "." * ((badge.ticks // 400) % 4)
+    screen.pen = BG
     screen.clear()
     if _font:
         screen.font = _font
-        screen.brush = WHITE
+        screen.pen = WHITE
         screen.text(f"Connecting{dots}", 2, 55)
-        screen.brush = GRAY
+        screen.pen = GRAY
         screen.text("WiFi...", 2, 64)
 
 
 def _draw_no_wifi():
-    screen.brush = BG
+    screen.pen = BG
     screen.clear()
     if _font:
         screen.font = _font
-        screen.brush = RED
+        screen.pen = RED
         screen.text("No WiFi config", 2, 55)
-        screen.brush = GRAY
+        screen.pen = GRAY
         screen.text("Add to secrets.py", 2, 64)
 
 
@@ -292,30 +266,30 @@ def _handle_buttons():
     global _view, _menu_sel
 
     if _view == "chat":
-        if io.BUTTON_UP   in io.pressed:  conv.scroll_up()
-        if io.BUTTON_DOWN in io.pressed:  conv.scroll_down()
-        if io.BUTTON_B    in io.pressed:  conv.clear()
-        if io.BUTTON_C    in io.pressed:
+        if badge.pressed(BUTTON_UP):   conv.scroll_up()
+        if badge.pressed(BUTTON_DOWN): conv.scroll_down()
+        if badge.pressed(BUTTON_BACK): conv.clear()
+        if badge.pressed(BUTTON_MENU):
             _view = "menu"
             _menu_sel = 0
-        if io.BUTTON_A    in io.pressed:
+        if badge.pressed(BUTTON_SELECT):
             _msg_queue.append(("display", "Quick status?", "display"))
 
     elif _view == "menu":
         n = len(_MENU)
-        if io.BUTTON_UP   in io.pressed:  _menu_sel = (_menu_sel - 1) % n
-        if io.BUTTON_DOWN in io.pressed:  _menu_sel = (_menu_sel + 1) % n
-        if io.BUTTON_A    in io.pressed or io.BUTTON_C in io.pressed:
+        if badge.pressed(BUTTON_UP):   _menu_sel = (_menu_sel - 1) % n
+        if badge.pressed(BUTTON_DOWN): _menu_sel = (_menu_sel + 1) % n
+        if badge.pressed(BUTTON_SELECT):
             _MENU[_menu_sel][1]()
-        if io.BUTTON_B    in io.pressed:
+        if badge.pressed(BUTTON_BACK):
             _view = "chat"
 
 
 def _draw_hints():
     if _font:
         screen.font = _font
-        screen.brush = GRAY
-        screen.text("[A]Ping [B]Clear [C]Menu", 2, 108)
+        screen.pen = GRAY
+        screen.text("Sel:Ping Back:Clear Menu:Open", 2, 108)
 
 
 def _draw_menu():
@@ -326,11 +300,11 @@ def _draw_menu():
     for i, (label, _) in enumerate(_MENU):
         y = y0 + i * lh
         if i == _menu_sel:
-            screen.brush = YELLOW
-            screen.draw(shapes.rectangle(0, y - 1, 160, lh))
-            screen.brush = BG
+            screen.pen = YELLOW
+            screen.rectangle(0, y - 1, 160, lh)
+            screen.pen = BG
         else:
-            screen.brush = WHITE
+            screen.pen = WHITE
         screen.text(label, 4, y)
 
 
@@ -385,5 +359,4 @@ _MENU = [
 ]
 
 
-if __name__ == "__main__":
-    run(update)
+run(update)

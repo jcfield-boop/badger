@@ -3,7 +3,7 @@ Conversation history renderer for the 160×120 Tufty display.
 Renders chat messages in the scroll area below the status bar.
 """
 
-from badgeware import screen, brushes, shapes, PixelFont
+# screen, color, and font are runtime-provided globals (2026 API).
 
 # ── Layout constants ──────────────────────────────────────────────
 STATUS_BAR_H = 12       # pixels reserved at top for status bar
@@ -14,11 +14,11 @@ SCROLL_AREA_H = 108 - SCROLL_AREA_Y       # stop at y=108 where hints live
 MAX_LINES = SCROLL_AREA_H // LINE_H        # 94//8 = 11 visible lines
 
 # ── Colors ────────────────────────────────────────────────────────
-BG = brushes.color(13, 17, 23)
-USER_COLOR = brushes.color(88, 166, 255)      # GitHub blue
-MIMI_COLOR = brushes.color(210, 168, 255)     # purple
-SYSTEM_COLOR = brushes.color(139, 148, 158)   # grey
-THINKING_COLOR = brushes.color(211, 250, 55)  # phosphor yellow
+BG = color.rgb(13, 17, 23)
+USER_COLOR = color.rgb(88, 166, 255)      # GitHub blue
+MIMI_COLOR = color.rgb(210, 168, 255)     # purple
+SYSTEM_COLOR = color.rgb(139, 148, 158)   # grey
+THINKING_COLOR = color.rgb(211, 250, 55)  # phosphor yellow
 
 # ── State ─────────────────────────────────────────────────────────
 _font = None
@@ -29,7 +29,7 @@ _thinking = False
 
 def init():
     global _font
-    _font = PixelFont.load("/system/assets/fonts/ark.ppf")
+    _font = font.ark
 
 
 def _measure_width(text):
@@ -99,18 +99,18 @@ def draw():
     avail_w = 160 - MARGIN_X * 2
 
     # Build all display lines in order
-    all_lines = []  # list of (color, prefix, text_line)
+    all_lines = []  # list of (pen, prefix, text_line)
     for role, text in _messages:
         if role == "user":
-            color = USER_COLOR
+            pen = USER_COLOR
             prefix = "You: "
             indent = "     "
         elif role == "mimi":
-            color = MIMI_COLOR
+            pen = MIMI_COLOR
             prefix = "Mimi: "
             indent = "      "
         else:
-            color = SYSTEM_COLOR
+            pen = SYSTEM_COLOR
             prefix = ""
             indent = ""
 
@@ -119,16 +119,15 @@ def draw():
         wrapped = _word_wrap(first_text, avail_w)
         if not wrapped:
             continue
-        all_lines.append((color, wrapped[0]))
+        all_lines.append((pen, wrapped[0]))
         for continuation in wrapped[1:]:
-            all_lines.append((color, indent + continuation))
+            all_lines.append((pen, indent + continuation))
         all_lines.append((SYSTEM_COLOR, ""))  # blank separator
 
     # Thinking indicator
     if _thinking:
         # Animate with dots based on ticks
-        from badgeware import io
-        dots = "." * ((io.ticks // 400) % 4)
+        dots = "." * ((badge.ticks // 400) % 4)
         all_lines.append((THINKING_COLOR, f"Mimi: Thinking{dots}"))
 
     # Apply scroll
@@ -138,13 +137,13 @@ def draw():
 
     # Draw visible lines
     y = SCROLL_AREA_Y
-    for color, line_text in visible:
-        screen.brush = color
+    for pen, line_text in visible:
+        screen.pen = pen
         if line_text:
             screen.text(line_text, MARGIN_X, y)
         y += LINE_H
 
     # Scroll indicator
     if _scroll_offset > 0:
-        screen.brush = SYSTEM_COLOR
+        screen.pen = SYSTEM_COLOR
         screen.text(f"^ +{_scroll_offset}", 140, SCROLL_AREA_Y)

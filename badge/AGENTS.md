@@ -315,7 +315,7 @@ Use these current 2026 examples:
 | `apps/gallery/` | Image loading and navigation |
 | `apps/sense/` | External Qw/ST I2C sensor use |
 | `apps/demos/` | Graphics, brush, text, and transform techniques |
-| `apps/mimi/` | AI assistant (Telegram, LLM, tool use) — still on the 2025 `badgeware` API, not yet ported |
+| `apps/mimi/` | AI assistant (Telegram, LLM, tool use); non-blocking frame loop, no init()/on_exit() |
 
 ## Porting from Universe 2025
 

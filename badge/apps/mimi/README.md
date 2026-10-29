@@ -1,6 +1,6 @@
 # Mimi — AI Assistant Badge App
 
-Mimi is an AI assistant app for the GitHub Universe 2025 / Pimoroni Tufty RP2350 badge. It receives messages via Telegram, runs them through an LLM (OpenRouter), executes tools, and shows the conversation history on the badge display. Buttons provide direct interaction without a phone or browser.
+Mimi is an AI assistant app for the GitHub Universe 2026 badge. It receives messages via Telegram, runs them through an LLM (OpenRouter), executes tools, and shows the conversation history on the badge display. Buttons provide direct interaction without a phone or browser.
 
 ## Setup
 
@@ -122,10 +122,13 @@ arrives via Telegram. View pending jobs from the **Cron jobs** menu entry or ask
 |--------|-----------|-----------|
 | **UP** | Scroll up | Move selection up |
 | **DOWN** | Scroll down | Move selection down |
-| **A** | Quick status ping | Confirm selection |
-| **B** | Clear conversation | — |
-| **C** | Open menu | Confirm selection |
+| **SELECT** | Quick status ping | Confirm selection |
+| **BACK** | Clear conversation | Return to chat |
+| **MENU** | Open menu | — |
 | **HOME** | Return to launcher | Return to launcher |
+
+These are the 2026 badge's logical actions (orientation-independent), not raw
+A/B/C buttons — see `badge.pressed()` in `__init__.py`.
 
 ## Menu
 
@@ -138,11 +141,12 @@ arrives via Telegram. View pending jobs from the **Cron jobs** menu entry or ask
 
 ## Architecture
 
-Non-blocking frame loop — `init()` starts WiFi without waiting; `update()` shows a
-"Connecting…" screen until WiFi is ready, then switches to normal operation. Telegram
-is polled every 5 s with `timeout=0` (non-blocking). Cron is ticked every 1 s. Agent
-calls (LLM + tools) run synchronously in `update()` while the `_thinking` flag
-prevents further polling.
+Non-blocking frame loop — module-level setup starts WiFi without waiting (the
+2026 runtime has no separate `init()`/`on_exit()` hooks, only `run(update)`);
+`update()` shows a "Connecting…" screen until WiFi is ready, then switches to
+normal operation. Telegram is polled every 5 s with `timeout=0` (non-blocking).
+Cron is ticked every 1 s. Agent calls (LLM + tools) run synchronously in
+`update()` while the `_thinking` flag prevents further polling.
 
 ```
 update() frame loop
@@ -167,7 +171,7 @@ update() frame loop
 │                                │  (11 lines × 8 px, ark.ppf)
 │ …                              │
 ├────────────────────────────────┤  y=108
-│ [A]Ping [B]Clear [C]Menu      │  hints (ark.ppf)
+│ Sel:Ping Back:Clear Menu:Open │  hints (ark.ppf)
 └────────────────────────────────┘  y=120
 ```
 
@@ -175,7 +179,7 @@ update() frame loop
 
 ```
 apps/mimi/
-├── __init__.py       App entry: init(), update(), on_exit()
+├── __init__.py       App entry: module-level setup, update(), run(update)
 ├── agent.py          LLM call + tool dispatch loop
 ├── telegram.py       Telegram getUpdates poll + sendMessage
 ├── context.py        System prompt assembly (SOUL.md + MEMORY.md)
