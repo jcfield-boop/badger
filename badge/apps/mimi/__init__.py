@@ -335,6 +335,20 @@ def _draw_menu():
 
 # ── Menu actions ──────────────────────────────────────────────────
 
+def _action_demo_search():
+    global _view
+    _view = "chat"
+    _msg_queue.append(("display",
+        "Search the web for the latest GitHub Universe 2026 news and give me a one-sentence summary.",
+        "display"))
+
+def _action_demo_intro():
+    global _view
+    _view = "chat"
+    _msg_queue.append(("display",
+        "Introduce yourself in one sentence and tell me what you can do.",
+        "display"))
+
 def _action_memory():
     global _view
     _view = "chat"
@@ -375,6 +389,8 @@ def _action_back():
 
 
 _MENU = [
+    ("Demo: Web search", _action_demo_search),
+    ("Demo: Introduce",  _action_demo_intro),
     ("Memory view",  _action_memory),
     ("System info",  _action_sysinfo),
     ("Cron jobs",    _action_cron),

@@ -132,6 +132,10 @@ A/B/C buttons — see `badge.pressed()` in `__init__.py`.
 
 ## Menu
 
+- **Demo: Web search** — sends a canned prompt that triggers the `web_search`
+  tool; rehearsable, no typing needed
+- **Demo: Introduce** — canned prompt for a one-sentence self-introduction, no
+  tools, just the LLM
 - **Memory view** — show first 400 chars of MEMORY.md
 - **System info** — heap free, uptime, battery
 - **Cron jobs** — list scheduled tasks
