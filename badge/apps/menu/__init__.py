@@ -63,6 +63,9 @@ def restore():
 def update():
     global fade, opening, viewer, celebration
 
+    if badge.pressed():
+        haptic.click()
+
     if opening is not None:
         opening.advance()
         if opening.skippable() and badge.buttons.pressed():
@@ -100,9 +103,6 @@ def update():
         if badge.pressed(BUTTON_BACK) or badge.pressed(BUTTON_UP):
             picker.close()
     else:
-        if badge.pressed():
-            haptic.click()
-
         if badge.pressed(BUTTON_RIGHT):
             apps.move(1)
         if badge.pressed(BUTTON_LEFT):
