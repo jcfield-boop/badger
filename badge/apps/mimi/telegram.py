@@ -94,8 +94,34 @@ def _api_post(method, payload):
 
 # ── Public API ────────────────────────────────────────────────────
 
+# This firmware's HTTP client corrupts the request body for sendMessage
+# whenever the text contains a multi-byte UTF-8 character — confirmed live:
+# a message containing only an em dash got "Bad Request: message text is
+# empty" from Telegram, while the identical message in plain ASCII sent
+# fine. Mimi's real LLM responses routinely contain em dashes/smart quotes,
+# so this silently broke real delivery, not just an edge case. Map the
+# common ones to ASCII equivalents, then drop anything else non-ASCII
+# rather than risk the whole message failing to send.
+_ASCII_REPLACEMENTS = {
+    "—": "-",    # em dash
+    "–": "-",    # en dash
+    "‘": "'",    # left single quote
+    "’": "'",    # right single quote
+    "“": '"',    # left double quote
+    "”": '"',    # right double quote
+    "…": "...",  # ellipsis
+}
+
+
+def _to_ascii(text):
+    for src, dst in _ASCII_REPLACEMENTS.items():
+        text = text.replace(src, dst)
+    return text.encode("ascii", "replace").decode("ascii")
+
+
 def send_message(chat_id, text):
     """Send a Telegram message. Splits if > 4096 chars."""
+    text = _to_ascii(text)
     MAX_LEN = 4096
     for i in range(0, len(text), MAX_LEN):
         chunk = text[i:i + MAX_LEN]
