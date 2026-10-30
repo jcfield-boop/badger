@@ -117,10 +117,19 @@ def _api_post(method, payload):
 # whenever the text contains a multi-byte UTF-8 character — confirmed live:
 # a message containing only an em dash got "Bad Request: message text is
 # empty" from Telegram, while the identical message in plain ASCII sent
-# fine. Mimi's real LLM responses routinely contain em dashes/smart quotes,
-# so this silently broke real delivery, not just an edge case. Map the
-# common ones to ASCII equivalents, then drop anything else non-ASCII
-# rather than risk the whole message failing to send.
+# fine. Mimi's real LLM responses routinely contain em dashes/smart quotes
+# (or other non-ASCII a model happens to use, e.g. a degree symbol in a
+# weather answer), so this silently broke real delivery - reproduced again
+# live via a real weather-tool response that still had a non-ASCII char
+# the dictionary below didn't cover. Map the common ones to ASCII
+# equivalents, then filter anything else non-ASCII character-by-character.
+#
+# NB: str.encode("ascii", "replace") does NOT work on this MicroPython
+# build - confirmed live, it silently passes the original UTF-8 bytes
+# through unchanged (no exception, no effect). That's why the dictionary
+# substitution alone wasn't enough - the broken fallback let anything not
+# in the dictionary straight through. Must filter character-by-character
+# instead (same fix already applied to agent.py's _flatten()).
 _ASCII_REPLACEMENTS = {
     "—": "-",    # em dash
     "–": "-",    # en dash
@@ -135,7 +144,7 @@ _ASCII_REPLACEMENTS = {
 def _to_ascii(text):
     for src, dst in _ASCII_REPLACEMENTS.items():
         text = text.replace(src, dst)
-    return text.encode("ascii", "replace").decode("ascii")
+    return "".join(c if ord(c) < 128 else "?" for c in text)
 
 
 def send_message(chat_id, text):
