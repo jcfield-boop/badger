@@ -11,6 +11,7 @@ previous_clear = badge.default_clear
 badge.default_clear = color.rgb(0, 0, 0)
 
 import ui
+import haptic
 
 from app import shared as shared_apps
 from achievements import draw_marquee
@@ -31,6 +32,8 @@ except (ImportError, OSError):
 
 screen.antialias = image.X2
 screen.fill_rule = image.NON_ZERO
+
+haptic.init()  # DRV2605L on Qw/ST — no-op if not present
 
 apps = shared_apps("/system/apps")
 apps.achievements.listen()
@@ -97,6 +100,9 @@ def update():
         if badge.pressed(BUTTON_BACK) or badge.pressed(BUTTON_UP):
             picker.close()
     else:
+        if badge.pressed():
+            haptic.click()
+
         if badge.pressed(BUTTON_RIGHT):
             apps.move(1)
         if badge.pressed(BUTTON_LEFT):
