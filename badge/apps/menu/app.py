@@ -11,6 +11,7 @@ TILES_PER_ROW = 4
 
 APP_ORDER = (
     "mimi",
+    "buzz",
     "badge",
     "contacts",
     "mona_paint",
