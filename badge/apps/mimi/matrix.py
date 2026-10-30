@@ -16,6 +16,11 @@ Uses the is31fl3741.Matrix driver copied from this repo's comfort_matrix
 app (same board), but bypasses its draw(pixels, rgb) — that takes one
 shared color for every "lit" pixel; this writes the full per-pixel RGB
 frame directly to matrix.pwm via matrix.channels(x, y) instead.
+
+KNOWN ISSUE: this animation's current draw can trip the DRV2605L haptic
+driver's over-current protection when both share the Qw/ST power rail —
+see the note in haptic.py for the full diagnosis (confirmed live: not a
+code bug, resolved by not running all three Qw/ST accessories at once).
 """
 
 from is31fl3741 import Matrix

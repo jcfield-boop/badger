@@ -1,10 +1,25 @@
 """DRV2605L haptic driver over Qw/ST I2C — one-shot buzz on new messages.
 
-Confirmed present on the Qw/ST bus at its default address 0x5A (verified
-live via i2c.scan() alongside the SHT45 temp/humidity sensor at 0x44 and
-the IS31FL3741 RGB matrix at 0x30 — all three share the same bus). Standard
+Present on the Qw/ST bus at its default address 0x5A, alongside the SHT45
+temp/humidity sensor (0x44) and the IS31FL3741 RGB matrix (0x30) — all
+three share one power rail through the daisy-chained Qw/ST cable. Standard
 TI/Adafruit register sequence: exit standby into internal-trigger mode,
 select a built-in waveform-library effect, set GO to play it.
+
+KNOWN ISSUE (diagnosed live on real hardware, see badge/apps/buzz/):
+with all three devices connected, the DRV2605L's STATUS register (0x00)
+showed OC_DETECT tripping on every single buzz attempt, and its own
+built-in DIAGNOSTIC and AUTO_CAL routines both reported DIAG_RESULT=FAIL -
+not a code bug, confirmed by the chip's own self-test. Root cause: the
+crab matrix animation lighting ~50-60 pixels across all 3 RGB channels at
+once draws enough current to destabilize the shared rail enough to trip
+the haptic driver's over-current protection. This was NOT permanent
+damage - physically disconnecting the matrix and temp sensor, leaving only
+the DRV2605L on the bus, immediately cleared the fault (diagnostic, auto-
+cal, and a real buzz all came back clean; confirmed felt on real
+hardware). If reconnecting all three, expect this to resurface and budget
+for it (lower matrix CURRENT, avoid driving matrix + haptic in the same
+moment, or give them separate power if you keep all three permanently).
 """
 
 ADDRESS = 0x5A
