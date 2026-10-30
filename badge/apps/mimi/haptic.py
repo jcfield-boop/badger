@@ -13,9 +13,11 @@ _REG_MODE = 0x01
 _REG_LIBRARY = 0x03
 _REG_WAVESEQ1 = 0x04
 _REG_WAVESEQ2 = 0x05
+_REG_WAVESEQ3 = 0x06
 _REG_GO = 0x0C
 
-EFFECT_STRONG_CLICK = 1  # library 1 (ERM) effect #1 — "Strong Click - 100%"
+EFFECT_STRONG_CLICK = 1   # library 1 (ERM) effect #1 — "Strong Click - 100%" (~100ms tap)
+EFFECT_STRONG_BUZZ = 14   # library 1 (ERM) effect #14 — "Strong Buzz - 100%" (~1s sustained)
 # NB: if the attached actuator is an LRA rather than ERM, library 6 and a
 # different effect set applies — swap _REG_LIBRARY's value below.
 
@@ -46,14 +48,29 @@ def init():
         _available = False
 
 
-def buzz(effect=EFFECT_STRONG_CLICK):
-    """Fire a single built-in haptic effect. Non-blocking — the chip plays
-    it asynchronously once triggered."""
+def buzz(effect=EFFECT_STRONG_BUZZ):
+    """Fire a haptic effect twice back-to-back for a longer, more noticeable
+    buzz (a single "Strong Click" was reported as too short/weak). Non-
+    blocking — the chip plays the sequence asynchronously once triggered."""
     if not _available or not _initialised:
         return
     try:
         _write(_REG_WAVESEQ1, effect)
-        _write(_REG_WAVESEQ2, 0)  # terminate the sequence
+        _write(_REG_WAVESEQ2, effect)
+        _write(_REG_WAVESEQ3, 0)  # terminate the sequence
         _write(_REG_GO, 1)        # trigger playback
     except Exception as e:
         print(f"[haptic] buzz failed: {e}")
+
+
+def click():
+    """Single short tap — for per-button-press feedback on the capacitive
+    buttons, where buzz()'s longer double-pulse would feel sluggish."""
+    if not _available or not _initialised:
+        return
+    try:
+        _write(_REG_WAVESEQ1, EFFECT_STRONG_CLICK)
+        _write(_REG_WAVESEQ2, 0)  # terminate the sequence
+        _write(_REG_GO, 1)
+    except Exception as e:
+        print(f"[haptic] click failed: {e}")

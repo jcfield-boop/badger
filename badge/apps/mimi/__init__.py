@@ -303,6 +303,9 @@ def _run_agent(chat_id, text, channel="telegram"):
 def _handle_buttons():
     global _view, _menu_sel
 
+    if badge.pressed():  # non-empty set = at least one action newly pressed this frame
+        haptic.click()
+
     if _view == "chat":
         if badge.pressed(BUTTON_UP):   conv.scroll_up()
         if badge.pressed(BUTTON_DOWN): conv.scroll_down()
