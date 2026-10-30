@@ -58,28 +58,52 @@ def _get_model():
 
 # ── LLM call ─────────────────────────────────────────────────────
 
-# FIXME: Mimi's full markdown system prompt (context.build_system_prompt(),
-# headers/bullets/sections) reliably breaks this request on OpenRouter: the
-# API reports a bogus "messages[1].role missing" error that isn't present in
-# the JSON we actually send (confirmed via local round-trip and byte-level
-# inspection — no quotes/backslashes/control chars, correctly escaped).
-# Verified live and repeatedly: pure filler text of identical length and a
-# fully rewritten plain-prose paragraph both succeed; the real markdown
-# content fails even split in half, even with newlines collapsed to a single
-# line, even with the "## Credentials" section removed. The exact trigger
-# inside the wording is still unidentified — root-causing further needs the
-# actual LLM eval harness, not guesswork. Using this known-working flattened
-# prompt until that's done; it loses the File Paths/Credentials/Memory
-# sections from context.py, so file/memory-writing tool use is unverified.
-def _flatten(text, limit=1500):
-    """Defensive generic flattener for any message content sent to the LLM.
+# ROOT CAUSE (found): this firmware's bundled HTTP client has a genuine
+# byte-counting bug — likely Content-Length computed from character count
+# instead of UTF-8 byte count — that corrupts the tail of the request body
+# once enough multi-byte UTF-8 characters (em dashes, the "×" in "160×120",
+# etc.) accumulate across the payload. Below some accumulated deficit it's
+# invisible; past it, bytes get dropped from wherever the body happens to
+# end, which lands on the next message's "role" field and produces a bogus
+# "messages[x].role missing"/'use'/'ro' truncated-role error that isn't
+# present in the JSON we actually send (confirmed via local round-trip).
+# Verified live, repeatedly, with a real bisection: small snippets containing
+# one non-ASCII char succeed; the same char combined with more surrounding
+# content fails; an all-ASCII version of the identical content always
+# succeeds regardless of length. We can't patch the frozen HTTP client, so
+# the mitigation is to never send non-ASCII to it: _flatten() both strips
+# markdown structure AND forces ASCII on every message we send.
+#
+# NB: str.encode("ascii", "replace") does NOT work on this MicroPython
+# build — confirmed live: it silently passes the original UTF-8 bytes
+# through unchanged instead of replacing them (no exception, no effect).
+# Must filter character-by-character instead; same reason telegram.py's
+# fix relies on explicit dictionary substitution rather than that encode
+# fallback.
+_ASCII_REPLACEMENTS = {
+    "—": "-",    # em dash
+    "–": "-",    # en dash
+    "‘": "'",    # left single quote
+    "’": "'",    # right single quote
+    "“": '"',    # left double quote
+    "”": '"',    # right double quote
+    "…": "...",  # ellipsis
+    "×": "x",    # multiplication sign
+}
 
-    Collapses numbered/bulleted lines and multi-line structure to a single
-    plain-prose line, and caps length. This is a broad, unproven-per-case
-    precaution (see the FIXME above) applied to every tool result / user /
-    assistant message, not just the system prompt — the exact trigger for
-    the request corruption is still unidentified, so this reduces surface
-    area rather than guaranteeing a fix. Test after changing.
+
+def _ascii_only(text):
+    for src, dst in _ASCII_REPLACEMENTS.items():
+        text = text.replace(src, dst)
+    return "".join(c if ord(c) < 128 else "?" for c in text)
+
+
+def _flatten(text, limit=1500):
+    """Defensive flattener for any message content sent to the LLM: strips
+    markdown structure (headers/bullets) and forces ASCII (see root-cause
+    note above) to stay clear of the firmware HTTP client's byte-counting
+    bug. Applied to every tool result / user / assistant message, and to
+    the restored system-prompt sections below.
     """
     text = str(text)[:limit]
     parts = []
@@ -97,10 +121,17 @@ def _flatten(text, limit=1500):
         elif line[:2] in ("- ", "* "):
             line = line[2:]
         parts.append(line)
-    return " ".join(parts)
+    return _ascii_only(" ".join(parts))
 
 
-_FALLBACK_SYSTEM_PROMPT = (
+# Verified safe (live, repeated OpenRouter calls): plain-ASCII intro/tools
+# summary, standing in for context.py's SYSTEM_PROMPT_STATIC intro+tools
+# section, which contains a "×" that reliably triggers the bug above once
+# combined with enough other content. The File Paths/Credentials/Memory
+# sections ARE restored below (verbatim from context.py, run through
+# _flatten() to strip their em dashes) — those were lost entirely in the
+# previous stopgap fix, disabling memory-writing tool use.
+_SAFE_PROMPT_INTRO = (
     "You are Mimi, a personal AI assistant running on a GitHub Universe badge. "
     "You interact via Telegram and a small display. Keep responses under 800 words, "
     "prefer bullet points, be concise. Use the web_search tool for current facts, news, "
@@ -109,10 +140,23 @@ _FALLBACK_SYSTEM_PROMPT = (
 )
 
 
-def _call_llm(messages, system_prompt, api_key, model):
+def _build_system_prompt(turn_context=""):
+    """Safe intro + the real File Paths/Credentials/Memory sections and any
+    dynamic SOUL.md/USER.md/MEMORY.md/recent-notes content, all flattened,
+    plus this turn's channel/chat_id hint (also flattened)."""
+    real_prompt = ctx_module.build_system_prompt()
+    cut = real_prompt.find("## File Paths")
+    rest = real_prompt[cut:] if cut != -1 else ""
+    prompt = _SAFE_PROMPT_INTRO + "\n\n" + _flatten(rest, limit=4000)
+    if turn_context:
+        prompt += "\n\n" + _flatten(turn_context, limit=500)
+    return prompt
+
+
+def _call_llm(messages, turn_context, api_key, model):
     """POST to OpenRouter, return parsed response dict or raise."""
     # OpenAI/OpenRouter format: system prompt is the first message
-    full_messages = [{"role": "system", "content": _FALLBACK_SYSTEM_PROMPT}] + messages
+    full_messages = [{"role": "system", "content": _build_system_prompt(turn_context)}] + messages
     payload = {
         "model": model,
         "max_tokens": MAX_TOKENS,
@@ -242,16 +286,12 @@ def run(user_message, chat_id="default", channel="telegram", status_cb=None):
     # Append user message
     messages.append({"role": "user", "content": _flatten(user_message)})
 
-    # Build system prompt (includes memory)
-    system_prompt = ctx_module.build_system_prompt()
-
-    # Inject turn context hint
-    system_prompt += (
-        f"\n## Current Turn Context\n"
-        f"- source_channel: {channel}\n"
-        f"- source_chat_id: {chat_id}\n"
-        f"- If using cron_add for Telegram in this turn, set channel='telegram' "
-        f"and chat_id to source_chat_id.\n"
+    # Turn context hint — appended to the system prompt inside _call_llm
+    # (which builds the full prompt itself; see _build_system_prompt).
+    turn_context = (
+        f"Current turn context: source_channel={channel}, source_chat_id={chat_id}. "
+        f"If using cron_add for Telegram in this turn, set channel=telegram "
+        f"and chat_id to source_chat_id."
     )
 
     final_text = ""
@@ -261,7 +301,7 @@ def run(user_message, chat_id="default", channel="telegram", status_cb=None):
             status_cb("Thinking…" if iteration == 0 else f"Tool loop {iteration}…")
 
         try:
-            data = _call_llm(messages, system_prompt, api_key, model)
+            data = _call_llm(messages, turn_context, api_key, model)
         except Exception as e:
             print(f"[agent] LLM error: {e}")
             return f"Error: LLM call failed: {e}"
