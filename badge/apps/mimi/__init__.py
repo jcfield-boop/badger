@@ -97,6 +97,12 @@ _menu_sel         = 0
 _msg_queue        = []
 _font             = None
 
+# In-flight agent call, stepped one frame at a time (see _start_agent/
+# _step_agent) so the screen/LEDs/matrix keep redrawing during the wait.
+_agent_gen        = None
+_agent_chat_id    = None
+_agent_channel    = None
+
 # Startup state machine
 _ready            = False   # True after WiFi connected + time sync done
 _wifi_creds_found = True    # False if no WiFi credentials in secrets.py
@@ -200,10 +206,16 @@ def update():
         except Exception as e:
             print(f"[poll] {e}")
 
-    # Process one pending message (agent call blocks ~30-60s)
+    # Start a new agent call if one isn't already in flight
     if _msg_queue and not _thinking:
         chat_id, text, channel = _msg_queue.pop(0)
-        _run_agent(chat_id, text, channel)
+        _start_agent(chat_id, text, channel)
+
+    # Advance the in-flight agent call by exactly one step this frame —
+    # the rest of update() below (screen draw, leds/matrix animation)
+    # still runs every frame regardless, which is the whole point.
+    if _agent_gen is not None:
+        _step_agent()
 
     # Cron tick (fast, every 1 s)
     if now - _last_cron_ticks >= _CRON_INTERVAL_MS:
@@ -269,16 +281,31 @@ def _draw_wifi_timeout():
         screen.text("[Menu] Go offline", 2, 66)
 
 
-def _run_agent(chat_id, text, channel="telegram"):
-    global _thinking
+def _start_agent(chat_id, text, channel="telegram"):
+    """Begin an agent call. Doesn't block — _step_agent() advances it one
+    step per frame from update() until it finishes."""
+    global _thinking, _agent_gen, _agent_chat_id, _agent_channel
     _thinking = True
     conv.set_thinking(True)
     leds.set_thinking(True)
     shrimp_matrix.set_thinking(True)
     conv.add_message("user", text)
 
+    _agent_gen = agent.run_steps(text, chat_id=chat_id, channel=channel)
+    _agent_chat_id = chat_id
+    _agent_channel = channel
+
+
+def _step_agent():
+    """Advance the in-flight agent call by one step. Finalizes (sends the
+    Telegram reply, clears thinking state) once it completes or errors."""
+    global _thinking, _agent_gen
+
     try:
-        response = agent.run(text, chat_id=chat_id, channel=channel)
+        next(_agent_gen)
+        return  # still pending — try again next frame
+    except StopIteration as e:
+        response = e.value
     except Exception as e:
         response = f"Error: {e}"
         print(f"[app] agent: {e}")
@@ -288,10 +315,11 @@ def _run_agent(chat_id, text, channel="telegram"):
     leds.set_thinking(False)
     shrimp_matrix.set_thinking(False)
     _thinking = False
+    _agent_gen = None
 
-    if channel == "telegram" and _wifi_connected:
+    if _agent_channel == "telegram" and _wifi_connected:
         try:
-            telegram.send_message(chat_id, response)
+            telegram.send_message(_agent_chat_id, response)
         except Exception as e:
             print(f"[app] send: {e}")
 
