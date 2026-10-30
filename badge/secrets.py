@@ -27,8 +27,13 @@ MIMI_TELEGRAM_TOKEN = ""
 # OpenRouter API key (https://openrouter.ai/keys)
 MIMI_OPENROUTER_KEY = ""
 
-# Model to use — "openrouter/auto" picks the best available
-MIMI_MODEL = "openrouter/auto"
+# Model to use. "openrouter/auto" picks whatever's best/cheapest at the
+# time, but that can route to a reasoning-heavy model that burns its whole
+# token budget on internal reasoning and returns an empty response for a
+# simple prompt — confirmed live during this session's demo testing.
+# openai/gpt-4o-mini is the pinned default: fast, cheap, reliable tool
+# calling, never once returned empty across dozens of live tests.
+MIMI_MODEL = "openai/gpt-4o-mini"
 
 # Brave Search API key (https://brave.com/search/api/) — optional
 MIMI_BRAVE_KEY = ""
