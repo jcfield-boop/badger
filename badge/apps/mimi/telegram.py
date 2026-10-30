@@ -15,6 +15,7 @@ DEDUP_SIZE = 64     # ring buffer for seen message IDs
 _token = None
 _update_offset = 0
 _seen = []          # dedup ring buffer of (chat_id_hash ^ msg_id)
+_authorized_ids = None  # None = not loaded yet; [] once loaded = allow all
 
 
 def _get_token():
@@ -37,6 +38,24 @@ def _get_token():
             _token = line.split("=", 1)[1].strip()
             return _token
     return None
+
+
+def _get_authorized_ids():
+    """Load MIMI_AUTHORIZED_CHAT_IDS from secrets.py. Empty/unset = allow
+    all senders (preserves pre-allowlist behavior for anyone who hasn't
+    set it)."""
+    global _authorized_ids
+    if _authorized_ids is not None:
+        return _authorized_ids
+    try:
+        import sys
+        sys.path.insert(0, "/")
+        from secrets import MIMI_AUTHORIZED_CHAT_IDS
+        sys.path.pop(0)
+        _authorized_ids = [str(i) for i in MIMI_AUTHORIZED_CHAT_IDS]
+    except (ImportError, AttributeError):
+        _authorized_ids = []
+    return _authorized_ids
 
 
 def _msg_key(chat_id, msg_id):
@@ -168,6 +187,13 @@ def poll_once(message_queue, timeout=POLL_TIMEOUT):
         text = msg.get("text", "")
 
         if not text or not chat_id:
+            continue
+
+        # Allowlist (empty = allow all, for backward compat). Silent skip —
+        # don't reply, don't confirm the bot's existence to a stranger.
+        authorized = _get_authorized_ids()
+        if authorized and chat_id not in authorized:
+            print(f"[telegram] dropped message from unauthorized chat_id {chat_id}")
             continue
 
         # Dedup
