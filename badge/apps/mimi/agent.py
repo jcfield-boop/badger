@@ -6,22 +6,17 @@ Ported from agent_loop.c + llm_proxy.c.
 
 import gc
 import json
-import time
-import urequests
+import async_http
 import memory as mem_module
 import context as ctx_module
 import tools as tool_registry
 
 # ── Config ────────────────────────────────────────────────────────
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openrouter/auto"
 MAX_TOOL_ITERATIONS = 10
 MAX_TOKENS = 1000
-CHUNK_SIZE = 512  # bytes for reading response
-REQUEST_TIMEOUT_S = 60
-MAX_RETRIES = 1     # one retry on a transient network error (not on a slow-but-live response)
-RETRY_DELAY_S = 1
+MAX_RETRIES = 1  # one retry on a transient network error (not on a slow-but-live response)
 
 
 def _get_api_key():
@@ -153,8 +148,11 @@ def _build_system_prompt(turn_context=""):
     return prompt
 
 
-def _call_llm(messages, turn_context, api_key, model):
-    """POST to OpenRouter, return parsed response dict or raise."""
+def _call_llm_steps(messages, turn_context, api_key, model):
+    """Generator: yields "pending" repeatedly while stepping a non-blocking
+    HTTPS POST (see async_http.py — this is what lets the frame loop keep
+    redrawing/animating during the LLM wait instead of freezing). Returns
+    the parsed response dict; raises on failure."""
     # OpenAI/OpenRouter format: system prompt is the first message
     full_messages = [{"role": "system", "content": _build_system_prompt(turn_context)}] + messages
     payload = {
@@ -176,25 +174,20 @@ def _call_llm(messages, turn_context, api_key, model):
         "X-Title": "Mimi Badge",
     }
 
-    body = json.dumps(payload)
+    body = json.dumps(payload).encode()
     print(f"[agent] Request: {len(body)} bytes")
 
     status = None
     raw = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            resp = urequests.post(OPENROUTER_URL, headers=headers, data=body, timeout=REQUEST_TIMEOUT_S)
-            try:
-                status = resp.status_code
-                # Read response body — urequests buffers the whole response in PSRAM
-                raw = resp.content
-            finally:
-                resp.close()  # always release the socket, even if .content raised
+            status, raw = yield from async_http.post(
+                "openrouter.ai", "/api/v1/chat/completions", headers, body
+            )
             break
         except Exception as e:
             if attempt < MAX_RETRIES:
                 print(f"[agent] LLM request failed ({type(e).__name__}: {e}), retrying...")
-                time.sleep(RETRY_DELAY_S)
                 continue
             raise RuntimeError(f"request failed ({type(e).__name__}: {e})")
 
@@ -261,18 +254,21 @@ def _extract_response(data):
 
 # ── Agent loop ───────────────────────────────────────────────────
 
-def run(user_message, chat_id="default", channel="telegram", status_cb=None):
+def run_steps(user_message, chat_id="default", channel="telegram", status_cb=None):
     """
-    Run the full agent loop for a user message.
+    Generator version of run(): yields "pending" repeatedly while advancing
+    through LLM calls (each one itself frame-stepped — see _call_llm_steps
+    and async_http.py), and returns the final text response. Drive with
+    next() once per frame so the caller's frame loop can keep redrawing
+    (screen, LEDs, matrix animation) during the wait, instead of the whole
+    multi-second call freezing everything (confirmed live: that's exactly
+    what the old single blocking run() did — nothing drawn during the call
+    ever reached the screen).
 
-    Args:
-        user_message: The user's text.
-        chat_id: Telegram chat ID or "display".
-        channel: "telegram" or "display".
-        status_cb: Optional callable(str) for status updates (e.g. "Thinking…").
-
-    Returns:
-        Final text response string.
+    Tool dispatch (tool_registry.dispatch(), e.g. web_search's Tavily call)
+    is NOT yet frame-stepped — it's still a smaller residual blocking
+    window on turns that use a tool, vs. the LLM call itself which usually
+    dominates the wait and is now fully interleaved.
     """
     api_key = _get_api_key()
     if not api_key:
@@ -286,7 +282,7 @@ def run(user_message, chat_id="default", channel="telegram", status_cb=None):
     # Append user message
     messages.append({"role": "user", "content": _flatten(user_message)})
 
-    # Turn context hint — appended to the system prompt inside _call_llm
+    # Turn context hint — appended to the system prompt inside _call_llm_steps
     # (which builds the full prompt itself; see _build_system_prompt).
     turn_context = (
         f"Current turn context: source_channel={channel}, source_chat_id={chat_id}. "
@@ -301,7 +297,7 @@ def run(user_message, chat_id="default", channel="telegram", status_cb=None):
             status_cb("Thinking…" if iteration == 0 else f"Tool loop {iteration}…")
 
         try:
-            data = _call_llm(messages, turn_context, api_key, model)
+            data = yield from _call_llm_steps(messages, turn_context, api_key, model)
         except Exception as e:
             print(f"[agent] LLM error: {e}")
             return f"Error: LLM call failed: {e}"
@@ -353,3 +349,15 @@ def run(user_message, chat_id="default", channel="telegram", status_cb=None):
     mem_module.save_session(chat_id, messages)
 
     return final_text or "(no response)"
+
+
+def run(user_message, chat_id="default", channel="telegram", status_cb=None):
+    """Blocking convenience wrapper around run_steps(), for callers that
+    don't need per-frame interleaving (ad-hoc testing, scripts). __init__.py
+    uses run_steps() directly so the frame loop can keep redrawing."""
+    gen = run_steps(user_message, chat_id, channel, status_cb)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as e:
+        return e.value
