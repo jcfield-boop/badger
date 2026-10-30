@@ -75,6 +75,9 @@ try:
     import tools as tool_registry
     import cron as cron_module
     import telegram
+    import leds
+    import haptic
+    import matrix as shrimp_matrix
     from ui import conversation as conv
     from ui import status_bar as sbar
 
@@ -118,6 +121,8 @@ screen.font = _font
 
 cron_module.init()
 tool_registry.init(cron_instance=cron_module)
+haptic.init()          # DRV2605L on Qw/ST — no-op if not present
+shrimp_matrix.init()   # IS31FL3741 RGB matrix on Qw/ST — no-op if not present
 
 # Start WiFi without blocking — update() will poll for connection
 _wifi_creds_found = wifi.start_connect()
@@ -177,6 +182,9 @@ def update():
 
     # ── Normal operation ──────────────────────────────────────────
 
+    leds.update(now)
+    shrimp_matrix.update(now)
+
     # WiFi status refresh (non-blocking)
     if now - _last_wifi_ticks >= _WIFI_INTERVAL_MS:
         _last_wifi_ticks = now
@@ -187,7 +195,8 @@ def update():
     if _wifi_connected and not _thinking and (now - _last_poll_ticks) >= _POLL_INTERVAL_MS:
         _last_poll_ticks = now
         try:
-            telegram.poll_once(_msg_queue, timeout=0)
+            if telegram.poll_once(_msg_queue, timeout=0) > 0:
+                haptic.buzz()
         except Exception as e:
             print(f"[poll] {e}")
 
@@ -264,6 +273,8 @@ def _run_agent(chat_id, text, channel="telegram"):
     global _thinking
     _thinking = True
     conv.set_thinking(True)
+    leds.set_thinking(True)
+    shrimp_matrix.set_thinking(True)
     conv.add_message("user", text)
 
     try:
@@ -274,6 +285,8 @@ def _run_agent(chat_id, text, channel="telegram"):
 
     conv.add_message("mimi", response)
     conv.set_thinking(False)
+    leds.set_thinking(False)
+    shrimp_matrix.set_thinking(False)
     _thinking = False
 
     if channel == "telegram" and _wifi_connected:
