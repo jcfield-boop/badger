@@ -19,6 +19,11 @@ GITHUB_TOKEN = ""
 # Telegram Bot token (from @BotFather)
 MIMI_TELEGRAM_TOKEN = ""
 
+# Optional: restrict Telegram to these chat_ids only (your own user ID).
+# Empty/unset = allow anyone who finds the bot — not recommended, since
+# they'd get full file read/write, http_request, and cron access.
+# MIMI_AUTHORIZED_CHAT_IDS = ["123456789"]
+
 # OpenRouter API key (https://openrouter.ai/keys)
 MIMI_OPENROUTER_KEY = ""
 
