@@ -1,5 +1,8 @@
-"""Animated crab (claws open/close) on the Qw/ST RGB matrix (Adafruit
-13x9, IS31FL3741) while Mimi is thinking.
+"""Crab logo on the Qw/ST RGB matrix (Adafruit 13x9, IS31FL3741).
+
+Shown statically (frame A) whenever the badge is idle; animates
+claws open/close while Mimi is thinking, then returns to the
+static frame when done.
 
 Pixel data below is a real downsample of Twemoji's crab emoji (U+1F980,
 jdecked/twemoji, MIT licensed), not hand-drawn geometry — a detailed
@@ -26,7 +29,10 @@ code bug, resolved by not running all three Qw/ST accessories at once).
 from is31fl3741 import Matrix
 
 ADDRESS = 0x30
-CURRENT = 8       # same conservative default comfort_matrix uses
+CURRENT = 4       # halved from the previous default of 8 — the crab is now lit
+                  # continuously (not just while thinking), so it shares the
+                  # Qw/ST rail with the haptic driver far more of the time;
+                  # see haptic.py's over-current diagnosis.
 FRAME_MS = 400
 
 W, H = Matrix.WIDTH, Matrix.HEIGHT  # 13, 9
@@ -87,6 +93,7 @@ def init():
         _i2c = I2C()
         _matrix = Matrix(_i2c, ADDRESS, CURRENT)
         _available = True
+        _draw(_FRAMES[0])
     except Exception as e:
         print(f"[matrix] not available: {e}")
         _available = False
@@ -96,10 +103,11 @@ def set_thinking(active):
     global _thinking, _frame_index, _last_switch
     _thinking = active
     if not active and _available:
+        _frame_index = 0
         try:
-            _draw([(0, 0, 0)] * (W * H))
+            _draw(_FRAMES[0])
         except Exception as e:
-            print(f"[matrix] clear failed: {e}")
+            print(f"[matrix] draw failed: {e}")
 
 
 def update(now_ticks):
